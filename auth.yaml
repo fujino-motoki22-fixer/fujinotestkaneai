@@ -1,0 +1,88 @@
+name: $(Date:yyyyMMdd)$(Rev:.r)
+trigger:
+  branches:
+    include:
+    - develop
+  paths:
+    include:
+    - FIXER.MHLW.Backend.Authorization/*
+    - FIXER.MHLW.Backend.Models/*
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: backEnd_Variable
+  - name: azureContainerRegistry
+    value: $(AZURE_CONTAINER_REGISTRY)
+  - name: azureSubscriptionEndpoint
+    value: $(AZURE_SUBSCRIPTION_ENDPOINT)
+  - name: Parameters.RestoreBuildProjects
+    value: "FIXER.MHLW.Backend.Authorization/*.csproj"
+  - name: BuildConfiguration
+    value: "Release"
+  - group: DeployEnvironment
+  - name: DeployEnvironment
+    value: $(ENV)
+
+steps:
+  - task: UseDotNet@2
+    displayName: Set SDK version
+    inputs:
+      packageType: sdk
+      version: 6.0.x
+      installationPath: $(Agent.ToolsDirectory)/dotnet
+
+  - task: DownloadSecureFile@1
+    displayName: "Download secure file"
+    name: "appsettings_patient"
+    inputs:
+      secureFile: "appsettings.patient.json"
+
+  - script: "mv $(appsettings_patient.secureFilePath) $(System.DefaultWorkingDirectory)"
+    displayName: "Move appsettings.patient.json file"
+
+  - task: DownloadSecureFile@1
+    displayName: "Download secure file"
+    name: "appsettings_manager"
+    inputs:
+      secureFile: "appsettings.manager.json"
+
+  - script: "mv $(appsettings_manager.secureFilePath) $(System.DefaultWorkingDirectory)"
+    displayName: "Move appsettings.manager.json file"
+
+  - task: DotNetCoreCLI@2
+    displayName: Build
+    inputs:
+      command: "build"
+      projects: "$(Parameters.RestoreBuildProjects)"
+      arguments: "--configuration $(BuildConfiguration)"
+
+  - task: DotNetCoreCLI@2
+    displayName: Dotnet publish
+    inputs:
+      publishWebProjects: false
+      command: publish
+      projects: FIXER.MHLW.Backend.Authorization/FIXER.MHLW.Backend.Authorization.csproj
+      arguments: '-o "./app" -c Release --no-restore'
+      zipAfterPublish: false
+      modifyOutputPath: false
+
+  # docker build
+  - task: Docker@1
+    displayName: Build an image
+    inputs:
+      azureSubscriptionEndpoint: "$(azureSubscriptionEndpoint)"
+      azureContainerRegistry: $(azureContainerRegistry)
+      dockerFile: pipeline.Dockerfile
+      includeLatestTag: false
+      arguments: '--build-arg project=FIXER.MHLW.Backend.Authorization.dll'
+      imageName: $(Build.DefinitionName)-$(DeployEnvironment):$(Build.BuildNumber)
+
+  - task: Docker@1
+    displayName: Push an image
+    inputs:
+      azureSubscriptionEndpoint: "$(azureSubscriptionEndpoint)"
+      azureContainerRegistry: $(azureContainerRegistry)
+      command: push
+      imageName: $(Build.DefinitionName)-$(DeployEnvironment):$(Build.BuildNumber)
